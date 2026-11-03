@@ -1,2 +1,15 @@
+uploads/
+
+# Dependencies
 node_modules/
+
+# Environment secrets
 .env
+
+# Local test images
+photo.png
+fake.png
+
+# Local credential/output files
+admin.txt
+sita.txt

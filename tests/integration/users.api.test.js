@@ -1,162 +1,84 @@
-import { describe, expect, it } from 'vitest';
 import request from 'supertest';
-import { createApp } from '../../src/app.js';
+import { beforeEach, describe, expect, it } from 'vitest';
+import { ADMIN, bearer, buildTestApp, loginAs, RAM, registerAs, SITA } from '../helpers.js';
 
-describe('Users API', () => {
-  it('POST /api/v1/users → 201 and Location header', async () => {
-    const app = createApp();
+const USERS = '/api/v1/users';
 
-    const res = await request(app)
-      .post('/api/v1/users')
-      .set('Content-Type', 'application/json')
-      .send({
-        firstName: 'Sita',
-        lastName: 'Gurung',
-        email: 'sita@example.com',
-        password: 'Secret123',
-      });
+describe('Users API with RBAC + ABAC', () => {
+  let app;
+  let admin; // { user, token }
+  let sita;
+  let ram;
 
-    expect(res.status).toBe(201);
+  beforeEach(async () => {
+    ({ app } = await buildTestApp());
+    admin = await loginAs(app, ADMIN);
+    sita = await registerAs(app, SITA);
+    ram = await registerAs(app, RAM);
+  });
 
-    expect(res.body.data).toMatchObject({
-      firstName: 'Sita',
-      lastName: 'Gurung',
-      email: 'sita@example.com',
+  it('401 for every /users route without a token', async () => {
+    expect((await request(app).get(USERS)).status).toBe(401);
+    expect((await request(app).get(`${USERS}/${sita.user.id}`)).status).toBe(401);
+  });
+
+  describe('RBAC: admin-only routes', () => {
+    it('GET /users: admin 200, customer 403', async () => {
+      const asAdmin = await request(app).get(USERS).set(bearer(admin.token));
+      expect(asAdmin.status).toBe(200);
+      expect(asAdmin.body.meta.total).toBe(3);
+
+      const asCustomer = await request(app).get(USERS).set(bearer(sita.token));
+      expect(asCustomer.status).toBe(403);
+      expect(asCustomer.body.detail).toBe('Requires role: admin');
     });
 
-    expect(res.body.data).not.toHaveProperty('password');
-    expect(res.body.data).not.toHaveProperty('passwordHash');
+    it('PATCH /users/:id/role: only admins can promote', async () => {
+      const bySita = await request(app).patch(`${USERS}/${sita.user.id}/role`).set(bearer(sita.token)).send({ role: 'admin' });
+      expect(bySita.status).toBe(403); // can't promote yourself
 
-    expect(res.headers.location).toBe(
-      `/api/v1/users/${res.body.data.id}`,
-    );
-  });
-
-  it('GET /api/v1/users → 200 with data and pagination metadata', async () => {
-    const app = createApp();
-
-    const res = await request(app)
-      .get('/api/v1/users');
-
-    expect(res.status).toBe(200);
-    expect(res.body).toHaveProperty('data');
-    expect(res.body).toHaveProperty('meta');
-expect(res.body).toHaveProperty('links');
-    expect(Array.isArray(res.body.data)).toBe(true);
-  });
-
-  it('POST /api/v1/users rejects invalid data', async () => {
-    const app = createApp();
-
-    const res = await request(app)
-      .post('/api/v1/users')
-      .set('Content-Type', 'application/json')
-      .send({
-        firstName: '',
-        email: 'not-an-email',
-        password: 'short',
-      });
-
-    expect(res.status).toBe(400);
-
-    expect(res.headers['content-type']).toMatch(
-      /application\/problem\+json/,
-    );
-  });
-
-  it('POST /api/v1/users rejects fields that should not be set', async () => {
-    const app = createApp();
-
-    const res = await request(app)
-      .post('/api/v1/users')
-      .set('Content-Type', 'application/json')
-      .send({
-        firstName: 'Eve',
-        lastName: 'H',
-        email: 'eve@example.com',
-        password: 'Secret123',
-        role: 'admin',
-      });
-
-    expect(res.status).toBe(400);
-    expect(res.body).toEqual(
-      expect.objectContaining({
-        errors: expect.arrayContaining([
-          expect.objectContaining({
-            field: 'role',
-          }),
-        ]),
-      }),
-    );
-  });
-
-  it('GET /api/v1/users/:id → 404 for a missing user', async () => {
-    const app = createApp();
-
-    const res = await request(app)
-    .get('/api/v1/users/00000000-0000-0000-0000-000000000000');
-
-    expect(res.status).toBe(404);
-  });
-
-  it('DELETE /api/v1/users/:id → 204 No Content', async () => {
-    const app = createApp();
-
-    const createRes = await request(app)
-      .post('/api/v1/users')
-      .set('Content-Type', 'application/json')
-      .send({
-        firstName: 'Delete',
-        lastName: 'User',
-        email: 'delete@example.com',
-        password: 'Secret123',
-      });
-
-    const id = createRes.body.data.id;
-
-    const deleteRes = await request(app)
-      .delete(`/api/v1/users/${id}`);
-
-    expect(deleteRes.status).toBe(204);
-
-    const getRes = await request(app)
-      .get(`/api/v1/users/${id}`);
-
-    expect(getRes.status).toBe(404);
-  });
-
-  it('PATCH /api/v1/users/:id → 200 with updated data', async () => {
-    const app = createApp();
-
-    const createRes = await request(app)
-      .post('/api/v1/users')
-      .set('Content-Type', 'application/json')
-      .send({
-        firstName: 'Sita',
-        lastName: 'Gurung',
-        email: 'patch@example.com',
-        password: 'Secret123',
-      });
-
-    expect(createRes.status).toBe(201);
-
-    const id = createRes.body.data.id;
-
-    const updateRes = await request(app)
-      .patch(`/api/v1/users/${id}`)
-      .set('Content-Type', 'application/json')
-      .send({
-        phone: '+977-9800000000',
-      });
-
-    expect(updateRes.status).toBe(200);
-
-    expect(updateRes.body.data).toMatchObject({
-      id,
-      phone: '+977-9800000000',
+      const byAdmin = await request(app).patch(`${USERS}/${sita.user.id}/role`).set(bearer(admin.token)).send({ role: 'admin' });
+      expect(byAdmin.status).toBe(200);
+      expect(byAdmin.body.data.role).toBe('admin');
     });
 
-    expect(updateRes.body.data).not.toHaveProperty('password');
-    expect(updateRes.body.data).not.toHaveProperty('passwordHash');
+    it('400 for an invalid role', async () => {
+      const res = await request(app).patch(`${USERS}/${sita.user.id}/role`).set(bearer(admin.token)).send({ role: 'superuser' });
+      expect(res.status).toBe(400);
+    });
+  });
+
+  describe('ABAC: ownership rules', () => {
+    it('a customer can read and update THEIR OWN profile', async () => {
+      const url = `${USERS}/${sita.user.id}`;
+      expect((await request(app).get(url).set(bearer(sita.token))).status).toBe(200);
+
+      const res = await request(app).patch(url).set(bearer(sita.token)).send({ phone: '+977-9811111111' });
+      expect(res.status).toBe(200);
+      expect(res.body.data.phone).toBe('+977-9811111111');
+    });
+
+    it("a customer can NOT read or update someone else's profile", async () => {
+      const url = `${USERS}/${ram.user.id}`;
+      expect((await request(app).get(url).set(bearer(sita.token))).status).toBe(403);
+      expect((await request(app).patch(url).set(bearer(sita.token)).send({ phone: '+977-9811111111' })).status).toBe(403);
+    });
+
+    it('an admin can read and update anyone', async () => {
+      const url = `${USERS}/${ram.user.id}`;
+      expect((await request(app).get(url).set(bearer(admin.token))).status).toBe(200);
+      expect((await request(app).patch(url).set(bearer(admin.token)).send({ lastName: 'Thapa Magar' })).status).toBe(200);
+    });
+
+    it('DELETE: customers never; admins yes, but not themselves', async () => {
+      expect((await request(app).delete(`${USERS}/${sita.user.id}`).set(bearer(sita.token))).status).toBe(403);
+      expect((await request(app).delete(`${USERS}/${admin.user.id}`).set(bearer(admin.token))).status).toBe(403);
+      expect((await request(app).delete(`${USERS}/${sita.user.id}`).set(bearer(admin.token))).status).toBe(204);
+    });
+  });
+
+  it('middleware order: 401 (no token) is checked before 400 (bad id)', async () => {
+    expect((await request(app).get(`${USERS}/123`)).status).toBe(401);
+    expect((await request(app).get(`${USERS}/123`).set(bearer(admin.token))).status).toBe(400);
   });
 });
