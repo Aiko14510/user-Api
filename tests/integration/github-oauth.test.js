@@ -11,7 +11,7 @@ function fakeGithubFetch({ id = 4242, login = 'sita-dev', name = 'Sita Gurung', 
       if (body.code !== 'good-code' || !body.code_verifier) return json({ error: 'bad_verification_code' });
       return json({ access_token: 'gho_fake', token_type: 'bearer' });
     }
-    if (url === 'https://api.github.com/user') return json({ id, login, name });
+    if (url === 'https://api.github.com/user') return json({ id, login, name });`      `
     if (url === 'https://api.github.com/user/emails') return json([{ email, primary: true, verified }]);
     throw new Error(`Unexpected URL ${url}`);
   });
